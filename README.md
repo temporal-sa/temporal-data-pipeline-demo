@@ -91,6 +91,8 @@ This demo illustrates how to build a data pipeline with Temporal using the Pytho
    - Web UI: [http://localhost:8080](http://localhost:8080)
    - Temporal Web UI: [http://localhost:8233](http://localhost:8233)
 
+To present the demo, follow [RUNBOOK.md](RUNBOOK.md): the walkthrough beat by beat, and where in the code each part happens.
+
 ## Demo Scenarios
 
 ### Web UI Demo Path
