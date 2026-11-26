@@ -279,7 +279,7 @@ namespace yourself: the worker can register it only on a dev server.
 ### Sessions and Files
 
 Each browser gets its own session cookie, and its jobs' workflow IDs are
-`pipeline-<session>-<job id>`, so concurrent visitors never see or signal each
+`pipeline-<session hash>-<job id>`, so concurrent visitors never see or signal each
 other's jobs. Each job works in its own directories,
 `demodata/working/<workflow id>/` and `demodata/output/<workflow id>/`.
 

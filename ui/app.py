@@ -1,3 +1,4 @@
+import hashlib
 import os
 import secrets
 import uuid
@@ -13,7 +14,8 @@ from dataobjects import DataPipelineParams
 app = Flask(__name__)
 
 # Each browser gets an unguessable session ID in this cookie. Workflow IDs are
-# built from it, so a browser only ever sees and drives its own jobs.
+# built from a hash of it, so a browser only ever sees and drives its own jobs,
+# and a workflow ID seen in the Temporal UI does not reveal the cookie.
 SESSION_COOKIE = "pipeline_session"
 
 # Bounds a run nobody finishes (RecoverableFailure retries its bug until the
@@ -75,7 +77,8 @@ def save_session(response: Response) -> Response:
 
 
 def workflow_id(job_id: str) -> str:
-    return f"pipeline-{g.session_id}-{job_id}"
+    session_key = hashlib.sha256(g.session_id.encode()).hexdigest()[:16]
+    return f"pipeline-{session_key}-{job_id}"
 
 
 def temporal_ui_link(job_id: str) -> str:
