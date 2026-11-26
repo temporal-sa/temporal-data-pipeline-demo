@@ -24,7 +24,7 @@ This demo illustrates how to build a data pipeline with Temporal using the Pytho
 
 ### Prerequisites
 
-* Python >= 3.10
+* Python >= 3.11
 * [uv package manager](https://docs.astral.sh/uv/)
 * [Temporal CLI](https://docs.temporal.io/cli) for local development
 * [Temporal Cloud account](https://cloud.temporal.io/) (optional, for production demos)
@@ -71,23 +71,18 @@ This demo illustrates how to build a data pipeline with Temporal using the Pytho
    just worker
    ```
 
+   On startup the worker registers the `Step` search attribute the
+   AdvancedVisibility scenario uses, if the namespace does not have it yet.
+
 6. **Start the UI** (in another terminal)
    ```bash
-   uv run ui/app.py
+   uv run gunicorn -b 0.0.0.0:8080 --threads 8 ui.app:app
    
    # Or using just
    just ui
    ```
 
-7. **Set up search attributes** (required for AdvancedVisibility scenario)
-   ```bash
-   just add-search-attribute
-   
-   # Or directly:
-   # temporal operator search-attribute create --name Step --type Keyword
-   ```
-
-8. **Access the demo**
+7. **Access the demo**
    - Web UI: [http://localhost:8080](http://localhost:8080)
    - Temporal Web UI: [http://localhost:8233](http://localhost:8233)
 
@@ -129,7 +124,6 @@ The web interface provides an intuitive way to demonstrate Temporal workflows to
 - **Key features:** Dynamic search attributes, workflow discoverability, business intelligence
 - **Talking points:** "Watch how we can track exactly where each workflow is in real-time - perfect for dashboards and reporting"
 - **Demo tip:** Show Temporal Web UI search functionality with `Step:validation` queries
-- **Setup required:** Run `just add-search-attribute` before first use
 
 **HumanInLoopSignal** - Manual intervention using Signals
 - **What happens:** Workflow pauses after Load activity, waits for external signal to continue
@@ -186,7 +180,7 @@ For technical audiences or detailed demonstrations, use the CLI interface.
    temporal workflow start \
      --workflow-id "job-demo-001" \
      --type "DataPipelineHappyPath" \
-     --task-queue "worker_specific_task_queue-distribution-queue" \
+     --task-queue "data-pipeline" \
      --input '{"input_filename": "info.json", "foldername": "./demodata", "poll_or_wait": "poll", "validation": "orange", "scenario": "HappyPath", "key": "demo-001"}'
    ```
 
@@ -248,27 +242,52 @@ temporal workflow terminate --workflow-id "job-demo-001" --reason "Demo complete
 
 ### Local Development (Default)
 
-No configuration needed. The demo uses `localhost:7233` by default.
+No configuration needed. The demo connects to `localhost:7233`, namespace
+`default`, and runs on the task queue `data-pipeline`.
 
 ### Temporal Cloud Configuration
 
-Edit `.env` with your Temporal Cloud credentials:
+The connection is read by the Temporal SDK's
+[environment configuration](https://docs.temporal.io/develop/environment-configuration),
+from environment variables (or a `temporal.toml` profile). Set them in your
+shell or in `.env`:
 
 ```bash
 # Temporal Cloud connection
-TEMPORAL_HOST_URL=your-namespace.tmprl.cloud:7233
-TEMPORAL_NAMESPACE=your-namespace
+TEMPORAL_ADDRESS=your-namespace.abc123.tmprl.cloud:7233
+TEMPORAL_NAMESPACE=your-namespace.abc123
+TEMPORAL_API_KEY=your-api-key
+TEMPORAL_TLS=true
 
-# mTLS certificates (required for Temporal Cloud)
-TEMPORAL_MTLS_TLS_CERT=/path/to/your/cert.pem
-TEMPORAL_MTLS_TLS_KEY=/path/to/your/key.key
+# Or mTLS certificates instead of an API key
+TEMPORAL_TLS_CLIENT_CERT_PATH=/path/to/your/cert.pem
+TEMPORAL_TLS_CLIENT_KEY_PATH=/path/to/your/key.key
 
 # Optional: Enable payload encryption
 ENCRYPT_PAYLOADS=true
 
-# Optional: Custom task queue name
+# Task queue the workflows run on
 TEMPORAL_TASK_QUEUE=data-pipeline
+
+# Temporal UI each job links to
+TEMPORAL_UI_URL=https://cloud.temporal.io
 ```
+
+On Temporal Cloud, create the `Step` search attribute (Keyword) on the
+namespace yourself: the worker can register it only on a dev server.
+
+### Sessions and Files
+
+Each browser gets its own session cookie, and its jobs' workflow IDs are
+`pipeline-<session>-<job id>`, so concurrent visitors never see or signal each
+other's jobs. Each job works in its own directories,
+`demodata/working/<workflow id>/` and `demodata/output/<workflow id>/`.
+
+### Container Image
+
+The `Dockerfile` builds one image for both processes. It starts the web UI on
+`$PORT` (default 8080); run the worker from the same image with
+`python worker.py`.
 
 ## Demo Tips for Trade Shows
 
@@ -327,6 +346,7 @@ temporal-data-pipeline-demo/
 ├── DataPipelineWorkflowScenarios.py # Dynamic workflow for all scenarios
 ├── dataobjects.py                  # Data classes and exceptions
 ├── encryption_codec.py             # Optional payload encryption
+├── Dockerfile                      # Image for the web UI and the worker
 ├── ui/                            # Flask web interface
 │   ├── app.py                     # Web application
 │   └── templates/                 # HTML templates
