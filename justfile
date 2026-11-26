@@ -5,6 +5,25 @@
 default:
     @just --list
 
+# Docker: the whole demo with no setup
+
+# Build and start the Temporal dev server, the worker and the web UI in Docker
+up:
+    docker compose up --build --detach --wait
+    @echo ""
+    @echo "Demo is up:"
+    @echo "  Web UI:          http://localhost:${DEMO_PORT:-8080}"
+    @echo "  Temporal Web UI: http://localhost:${TEMPORAL_UI_PORT:-8233}"
+    @echo "Follow the logs with 'just logs'; stop everything with 'just down'."
+
+# Stop the Docker demo and remove its containers and job files
+down:
+    docker compose down --volumes
+
+# Follow the Docker demo's logs (all services, or one: just logs worker)
+logs *SERVICE:
+    docker compose logs --follow {{SERVICE}}
+
 # Code Quality & Development Recipes
 
 # Run ruff linting checks
@@ -47,12 +66,6 @@ temporal-stop:
     @echo "Stopping Temporal server..."
     @pkill -f "temporal server start-dev" || echo "No Temporal server process found"
 
-# Add search attribute for AdvancedVisibility scenario
-add-search-attribute:
-    @echo "Creating Step search attribute for AdvancedVisibility scenario..."
-    temporal operator search-attribute create --name Step --type Keyword
-    @echo "Search attribute created successfully!"
-
 # Application Services
 
 # Start the Temporal worker
@@ -61,7 +74,7 @@ worker:
 
 # Start the Flask UI application
 ui:
-    uv run ui/app.py
+    uv run gunicorn -b 0.0.0.0:8080 --threads 8 ui.app:app
 
 # Workflow Operations
 
@@ -71,7 +84,7 @@ start-workflow SCENARIO JOB_ID:
     temporal workflow start \
         --workflow-id "job-{{JOB_ID}}" \
         --type "DataPipeline{{SCENARIO}}" \
-        --task-queue "worker_specific_task_queue-distribution-queue" \
+        --task-queue "${TEMPORAL_TASK_QUEUE:-data-pipeline}" \
         --input '{"input_filename": "info.json", "foldername": "./demodata", "poll_or_wait": "poll", "validation": "orange", "scenario": "{{SCENARIO}}", "key": "{{JOB_ID}}"}'
 
 # Query workflow progress by job ID

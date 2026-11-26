@@ -4,6 +4,10 @@ _Leveraging the Temporal Python SDK_
 
 This demo illustrates how to build a data pipeline with Temporal using the Python SDK. It features a web UI and CLI interface for executing ETL workflows with various scenario demonstrations including error handling, human-in-the-loop patterns, and advanced visibility features.
 
+To present the demo, follow the [runbook](RUNBOOK.md): what to click, what to say and the code behind each scenario.
+
+![The demo's start page](docs/screenshots/start-job.png)
+
 | Prerequisites      |    | Features       |    | Patterns            |    |
 |:-------------------|----|----------------|----|---------------------|----|
 | Network Connection | ✅ | Schedule       |    | Entity              |    |
@@ -20,11 +24,43 @@ This demo illustrates how to build a data pipeline with Temporal using the Pytho
 |                    |    | Worker Metrics |    |                     |    |
 |                    |    | Side Effect    |    |                     |    |
 
-## Quick Start Installation
+## Quick Start with Docker
+
+With only [Docker](https://docs.docker.com/get-docker/) (with Compose) and
+[just](https://github.com/casey/just) installed:
+
+```bash
+git clone <repository-url>
+cd temporal-data-pipeline-demo
+just up
+```
+
+`just up` builds the image and starts a Temporal dev server, the worker and
+the web UI (`compose.yaml`), and returns once they are healthy:
+
+- Web UI: [http://localhost:8080](http://localhost:8080)
+- Temporal Web UI: [http://localhost:8233](http://localhost:8233)
+
+Without `just`, run `docker compose up --build --detach --wait`.
+
+- `just logs` (or `just logs worker`) follows the logs.
+- `just down` stops everything and removes the job files; the dev server keeps
+  no history between runs.
+- To use other host ports, set `DEMO_PORT` and `TEMPORAL_UI_PORT`, for example
+  `DEMO_PORT=9080 just up`.
+- To crash the worker mid-job, run `docker compose kill worker`, then
+  `docker compose start worker`.
+- After you change the code, run `just up` again: it rebuilds the image and
+  replaces the worker, and running jobs carry on.
+- Temporal's gRPC port stays inside Docker, so the stack runs beside a local
+  `temporal server start-dev`. Use the CLI against it with
+  `docker compose exec temporal temporal workflow list --address 127.0.0.1:7233`.
+
+## Quick Start without Docker
 
 ### Prerequisites
 
-* Python >= 3.10
+* Python >= 3.11
 * [uv package manager](https://docs.astral.sh/uv/)
 * [Temporal CLI](https://docs.temporal.io/cli) for local development
 * [Temporal Cloud account](https://cloud.temporal.io/) (optional, for production demos)
@@ -71,23 +107,18 @@ This demo illustrates how to build a data pipeline with Temporal using the Pytho
    just worker
    ```
 
+   On startup the worker registers the `Step` search attribute the
+   AdvancedVisibility scenario uses, if the namespace does not have it yet.
+
 6. **Start the UI** (in another terminal)
    ```bash
-   uv run ui/app.py
+   uv run gunicorn -b 0.0.0.0:8080 --threads 8 ui.app:app
    
    # Or using just
    just ui
    ```
 
-7. **Set up search attributes** (required for AdvancedVisibility scenario)
-   ```bash
-   just add-search-attribute
-   
-   # Or directly:
-   # temporal operator search-attribute create --name Step --type Keyword
-   ```
-
-8. **Access the demo**
+7. **Access the demo**
    - Web UI: [http://localhost:8080](http://localhost:8080)
    - Temporal Web UI: [http://localhost:8233](http://localhost:8233)
 
@@ -129,7 +160,6 @@ The web interface provides an intuitive way to demonstrate Temporal workflows to
 - **Key features:** Dynamic search attributes, workflow discoverability, business intelligence
 - **Talking points:** "Watch how we can track exactly where each workflow is in real-time - perfect for dashboards and reporting"
 - **Demo tip:** Show Temporal Web UI search functionality with `Step:validation` queries
-- **Setup required:** Run `just add-search-attribute` before first use
 
 **HumanInLoopSignal** - Manual intervention using Signals
 - **What happens:** Workflow pauses after Load activity, waits for external signal to continue
@@ -151,11 +181,13 @@ The web interface provides an intuitive way to demonstrate Temporal workflows to
 - **Talking points:** "Notice how the Load activity runs twice but produces the same result - Temporal guarantees exactly-once execution"
 - **Demo tip:** Show activity history to highlight duplicate execution with same results
 
-**RecoverableFailure** - Transient error handling and recovery
-- **What happens:** Workflow throws an exception mid-execution, triggering retry logic
-- **Key features:** Automatic retries, exponential backoff, workflow resilience
-- **Talking points:** "This simulates infrastructure failures - watch how Temporal automatically retries and recovers"
-- **Demo tip:** Show failed attempts in workflow history, then resume to demonstrate recovery
+**RecoverableFailure** - A bug in workflow code, fixed while the job waits
+- **What happens:** After the transform step the workflow code raises an exception. Temporal fails only the workflow task and keeps retrying it, so the job waits at the bug. The job page then shows a **Deploy fix** button: it sends this one job a `deploy_fix` Signal, which stands in for deploying fixed code, and the job resumes from the bug and completes
+- **Key features:** Workflow task retries, durable progress across a code fix
+- **Talking points:** "A bug doesn't lose the job: Temporal holds it where it failed, and once the fix is deployed it carries on with the finished steps kept"
+- **Demo tip:** Show the failing workflow task's attempt count in the Temporal UI before clicking **Deploy fix**. Locally you can deploy a real fix instead: delete the bug's two lines in `DataPipelineWorkflowScenarios.py` and restart the worker
+
+![A job paused at the bug, with its Deploy fix button](docs/screenshots/recoverable-failure-deploy-fix.png)
 
 **NonRecoverableFailure** - Permanent business logic failure
 - **What happens:** Validation activity fails (input.validation set to "blue"), workflow terminates
@@ -186,7 +218,7 @@ For technical audiences or detailed demonstrations, use the CLI interface.
    temporal workflow start \
      --workflow-id "job-demo-001" \
      --type "DataPipelineHappyPath" \
-     --task-queue "worker_specific_task_queue-distribution-queue" \
+     --task-queue "data-pipeline" \
      --input '{"input_filename": "info.json", "foldername": "./demodata", "poll_or_wait": "poll", "validation": "orange", "scenario": "HappyPath", "key": "demo-001"}'
    ```
 
@@ -248,27 +280,53 @@ temporal workflow terminate --workflow-id "job-demo-001" --reason "Demo complete
 
 ### Local Development (Default)
 
-No configuration needed. The demo uses `localhost:7233` by default.
+No configuration needed. The demo connects to `localhost:7233`, namespace
+`default`, and runs on the task queue `data-pipeline`.
 
 ### Temporal Cloud Configuration
 
-Edit `.env` with your Temporal Cloud credentials:
+The connection is read by the Temporal SDK's
+[environment configuration](https://docs.temporal.io/develop/environment-configuration),
+from environment variables (or a `temporal.toml` profile). Set them in your
+shell or in `.env`:
 
 ```bash
 # Temporal Cloud connection
-TEMPORAL_HOST_URL=your-namespace.tmprl.cloud:7233
-TEMPORAL_NAMESPACE=your-namespace
+TEMPORAL_ADDRESS=your-namespace.abc123.tmprl.cloud:7233
+TEMPORAL_NAMESPACE=your-namespace.abc123
+TEMPORAL_API_KEY=your-api-key
+TEMPORAL_TLS=true
 
-# mTLS certificates (required for Temporal Cloud)
-TEMPORAL_MTLS_TLS_CERT=/path/to/your/cert.pem
-TEMPORAL_MTLS_TLS_KEY=/path/to/your/key.key
+# Or mTLS certificates instead of an API key
+TEMPORAL_TLS_CLIENT_CERT_PATH=/path/to/your/cert.pem
+TEMPORAL_TLS_CLIENT_KEY_PATH=/path/to/your/key.key
 
 # Optional: Enable payload encryption
 ENCRYPT_PAYLOADS=true
 
-# Optional: Custom task queue name
+# Task queue the workflows run on
 TEMPORAL_TASK_QUEUE=data-pipeline
+
+# Temporal UI each job links to
+TEMPORAL_UI_URL=https://cloud.temporal.io
 ```
+
+On Temporal Cloud, create the `Step` search attribute (Keyword) on the
+namespace yourself: the worker can register it only on a dev server.
+
+### Sessions and Files
+
+Each browser gets its own session cookie, and its jobs' workflow IDs are
+`pipeline-<session hash>-<job id>`, so concurrent visitors never see or signal each
+other's jobs. Each job works in its own directories,
+`demodata/working/<workflow id>/` and `demodata/output/<workflow id>/`.
+
+### Container Image
+
+The `Dockerfile` builds one image for both processes. It starts the web UI on
+`$PORT` (default 8080); run the worker from the same image with
+`python worker.py`. `compose.yaml` runs both, with a Temporal dev server, for
+`just up`.
 
 ## Demo Tips for Trade Shows
 
@@ -327,6 +385,8 @@ temporal-data-pipeline-demo/
 ├── DataPipelineWorkflowScenarios.py # Dynamic workflow for all scenarios
 ├── dataobjects.py                  # Data classes and exceptions
 ├── encryption_codec.py             # Optional payload encryption
+├── Dockerfile                      # Image for the web UI and the worker
+├── compose.yaml                    # Whole demo in Docker (just up)
 ├── ui/                            # Flask web interface
 │   ├── app.py                     # Web application
 │   └── templates/                 # HTML templates
@@ -341,7 +401,7 @@ temporal-data-pipeline-demo/
 
 ### Common Issues
 
-**Port conflicts**: If port 7233 is in use, stop other Temporal servers with `just temporal-stop`
+**Port conflicts**: If port 7233 is in use, stop other Temporal servers with `just temporal-stop`. With `just up`, if 8080 or 8233 is in use, pick other ports with `DEMO_PORT` and `TEMPORAL_UI_PORT`
 
 **Worker not starting**: Ensure Temporal server is running first
 

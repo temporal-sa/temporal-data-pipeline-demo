@@ -1,0 +1,12 @@
+.git
+.venv
+.env
+.sandbox-tmp
+.worktrees
+.claude
+.mypy_cache
+.ruff_cache
+**/__pycache__
+demodata/working
+demodata/output
+idempotent_keys.txt
