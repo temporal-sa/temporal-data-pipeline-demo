@@ -47,12 +47,6 @@ temporal-stop:
     @echo "Stopping Temporal server..."
     @pkill -f "temporal server start-dev" || echo "No Temporal server process found"
 
-# Add search attribute for AdvancedVisibility scenario
-add-search-attribute:
-    @echo "Creating Step search attribute for AdvancedVisibility scenario..."
-    temporal operator search-attribute create --name Step --type Keyword
-    @echo "Search attribute created successfully!"
-
 # Application Services
 
 # Start the Temporal worker
@@ -61,7 +55,7 @@ worker:
 
 # Start the Flask UI application
 ui:
-    uv run ui/app.py
+    uv run gunicorn -b 0.0.0.0:8080 --threads 8 ui.app:app
 
 # Workflow Operations
 
@@ -71,7 +65,7 @@ start-workflow SCENARIO JOB_ID:
     temporal workflow start \
         --workflow-id "job-{{JOB_ID}}" \
         --type "DataPipeline{{SCENARIO}}" \
-        --task-queue "worker_specific_task_queue-distribution-queue" \
+        --task-queue "${TEMPORAL_TASK_QUEUE:-data-pipeline}" \
         --input '{"input_filename": "info.json", "foldername": "./demodata", "poll_or_wait": "poll", "validation": "orange", "scenario": "{{SCENARIO}}", "key": "{{JOB_ID}}"}'
 
 # Query workflow progress by job ID
