@@ -131,8 +131,14 @@
                     }
                 })
                 .then(data => {
-                    // Update the progress bar
-                    document.getElementById('progress-bar').style.width = data.progress + '%';
+                    // Update the progress bar; while the workflow code is failing it
+                    // cannot answer the progress query, so the bar keeps its place
+                    if (data.progress !== null) {
+                        document.getElementById('progress-bar').style.width = data.progress + '%';
+                    }
+
+                    // RecoverableFailure: show the stuck job and its Deploy fix button
+                    updateBugElements(selectedScenario, data);
 
                     // Check if the progress is complete and redirect to order confirmation if needed
                     if (data.progress === 100) {
@@ -162,6 +168,47 @@
         document.addEventListener("DOMContentLoaded", function () {
             updateProgress();
         });
+
+        // RecoverableFailure: while the workflow task is failing, say so and
+        // offer the fix; once the job moves on, say it resumed
+        var fixDeployed = false;
+        function updateBugElements(selectedScenario, data) {
+            var bugElement = document.getElementById('workflowBug');
+            if (selectedScenario !== 'RecoverableFailure') {
+                return;
+            }
+            if (data.workflow_task_failing) {
+                bugElement.style.display = 'block';
+                document.getElementById('workflowBugAttempt').innerText = data.workflow_task_attempt;
+            } else if (fixDeployed) {
+                bugElement.style.display = 'none';
+                document.getElementById('fixResult').innerText = 'Fix deployed: the job resumed after the transform step.';
+            }
+        }
+
+        // Deploy the fix to this job (RecoverableFailure)
+        function deployFix() {
+            var urlParams = new URLSearchParams(window.location.search);
+            var job_id = urlParams.get('job_id');
+            var button = document.getElementById('deployFixButton');
+            button.disabled = true;
+
+            fetch('/deploy_fix?job_id=' + encodeURIComponent(job_id), {
+                method: 'POST',
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to deploy the fix');
+                }
+                fixDeployed = true;
+                document.getElementById('fixResult').innerText =
+                    'Fix deployed: the job resumes at its next workflow task retry.';
+            })
+            .catch(error => {
+                button.disabled = false;
+                document.getElementById('fixResult').innerText = error.message;
+            });
+        }
 
         // Define the signal function
         function signal() {
@@ -252,6 +299,14 @@
         <button onclick="update()">Update Complete Load</button>
         <p id="updateCountdown"></p>
     </div>      
+
+    <!-- Elements for RecoverableFailure scenario -->
+    <div id="workflowBug" style="display: none;">
+        <p style="color: #b00020;">Workflow bug: Temporal is retrying the workflow task (attempt
+            <span id="workflowBugAttempt"></span>).<br>The job waits at the bug with its finished steps kept.</p>
+        <button id="deployFixButton" onclick="deployFix()">Deploy fix</button>
+    </div>
+    <p id="fixResult"></p>
 
     <div id="updateResult"></div>
     <p id="error-message" style="color: red;"></p> 

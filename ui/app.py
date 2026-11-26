@@ -19,8 +19,11 @@ app = Flask(__name__)
 SESSION_COOKIE = "pipeline_session"
 
 # Bounds a run nobody finishes (RecoverableFailure retries its bug until the
-# code is fixed; HumanInLoop waits for a click).
+# fix is deployed; HumanInLoop waits for a click).
 WORKFLOW_EXECUTION_TIMEOUT = timedelta(minutes=30)
+
+# The job page polls progress every second; a query must not hold it longer.
+QUERY_TIMEOUT = timedelta(seconds=3)
 
 TEMPORAL_UI_URL = os.getenv("TEMPORAL_UI_URL", "http://localhost:8233").rstrip("/")
 TEMPORAL_UI_NAMESPACE = os.getenv("TEMPORAL_UI_NAMESPACE", os.getenv("TEMPORAL_NAMESPACE", "default"))
@@ -155,15 +158,10 @@ async def get_progress() -> Response | tuple[Response, int]:
     if not job_id:
         return jsonify({"error": "job_id parameter is required"}), 400
 
-    progress_percent = 0
+    progress_percent: int | None = 0
     try:
         client = await temporal_client()
         pipeline_workflow = client.get_workflow_handle(workflow_id(job_id))
-
-        try:
-            progress_percent = await pipeline_workflow.query("progress")
-        except Exception as e:
-            print(e)
 
         desc = await pipeline_workflow.describe()
         if desc.status in FAILED_STATUSES:
@@ -171,7 +169,28 @@ async def get_progress() -> Response | tuple[Response, int]:
             print(f"Error in get_progress route: {error_message}")
             return jsonify({"error": error_message}), 500
 
-        return jsonify({"progress": progress_percent})
+        # A pending workflow task past its first attempt means the workflow
+        # code failed and Temporal is retrying it (RecoverableFailure's bug).
+        # Such a workflow cannot answer the progress query, and the query waits
+        # on the failing task, so skip it then and cap its wait otherwise.
+        raw = desc.raw_description
+        task_attempt = raw.pending_workflow_task.attempt if raw.HasField("pending_workflow_task") else 0
+        if task_attempt > 1:
+            progress_percent = None
+        else:
+            try:
+                progress_percent = await pipeline_workflow.query("progress", rpc_timeout=QUERY_TIMEOUT)
+            except Exception as e:
+                print(e)
+                progress_percent = None
+
+        return jsonify(
+            {
+                "progress": progress_percent,
+                "workflow_task_failing": task_attempt > 1,
+                "workflow_task_attempt": task_attempt,
+            }
+        )
     except Exception:
         return jsonify({"progress": progress_percent})
 
@@ -192,6 +211,25 @@ async def signal() -> tuple[str, int] | tuple[Response, int]:
         return jsonify({"error": str(e)}), 500
 
     return "Signal received successfully", 200
+
+
+@app.route("/deploy_fix", methods=["POST"])
+async def deploy_fix() -> tuple[str, int] | tuple[Response, int]:
+    """Stand in for deploying fixed workflow code to this one job (RecoverableFailure)."""
+    job_id = request.args.get("job_id")
+
+    if not job_id:
+        return jsonify({"error": "job_id parameter is required"}), 400
+
+    try:
+        client = await temporal_client()
+        pipeline_workflow = client.get_workflow_handle(workflow_id(job_id))
+        await pipeline_workflow.signal("deploy_fix")
+    except Exception as e:
+        print(f"Error deploying the fix: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+    return "Fix deployed", 200
 
 
 @app.route("/update", methods=["POST"])

@@ -32,6 +32,7 @@ class DataPipelineWorkflowScenarios:
     def __init__(self) -> None:
         self.signal_received = False
         self.update_received = False
+        self.fix_deployed = False
         self._progress = 0
 
     @workflow.run
@@ -103,11 +104,13 @@ class DataPipelineWorkflowScenarios:
         )
         workflow.logger.info(f"Transform status: {input.input_filename}: {activity_output}")
 
-        # Non-Recoverable (bug) Scenario
-        if self.BUG == workflow_type:
-            # Comment out to fix recoverable scenario and uncomment pass
+        # Recoverable failure (bug) scenario: a plain exception in workflow code
+        # fails the workflow task, which Temporal retries until the code is
+        # fixed. The job page's Deploy fix button stands in for deploying fixed
+        # code to this one job: it sends the deploy_fix signal. Deleting this
+        # raise and restarting the worker is the real fix.
+        if self.BUG == workflow_type and not self.fix_deployed:
             raise Exception("Workflow bug!")
-            # pass
 
         # Set progress to 60%
         self._progress = 60
@@ -189,6 +192,10 @@ class DataPipelineWorkflowScenarios:
     async def load_complete_update(self, complete: str) -> str:
         self.update_received = True
         return "Workflow update successful"
+
+    @workflow.signal
+    async def deploy_fix(self) -> None:
+        self.fix_deployed = True
 
     @workflow.query
     def progress(self) -> int:
