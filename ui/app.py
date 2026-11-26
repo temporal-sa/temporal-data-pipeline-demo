@@ -1,12 +1,34 @@
+import os
+import secrets
 import uuid
+from datetime import timedelta
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, g, jsonify, render_template, request
 from flask.wrappers import Response
+from temporalio.client import Client, WorkflowExecutionStatus
 
-from client import get_client
+from client import TASK_QUEUE, get_client
 from dataobjects import DataPipelineParams
 
 app = Flask(__name__)
+
+# Each browser gets an unguessable session ID in this cookie. Workflow IDs are
+# built from it, so a browser only ever sees and drives its own jobs.
+SESSION_COOKIE = "pipeline_session"
+
+# Bounds a run nobody finishes (RecoverableFailure retries its bug until the
+# code is fixed; HumanInLoop waits for a click).
+WORKFLOW_EXECUTION_TIMEOUT = timedelta(minutes=30)
+
+TEMPORAL_UI_URL = os.getenv("TEMPORAL_UI_URL", "http://localhost:8233").rstrip("/")
+TEMPORAL_UI_NAMESPACE = os.getenv("TEMPORAL_UI_NAMESPACE", os.getenv("TEMPORAL_NAMESPACE", "default"))
+
+FAILED_STATUSES = {
+    WorkflowExecutionStatus.FAILED,
+    WorkflowExecutionStatus.TIMED_OUT,
+    WorkflowExecutionStatus.TERMINATED,
+    WorkflowExecutionStatus.CANCELED,
+}
 
 # Scenario choices dropdown
 scenarios = [
@@ -27,6 +49,43 @@ data = {
     "validation": "orange",
 }
 
+_client: Client | None = None
+
+
+async def temporal_client() -> Client:
+    """One Temporal client for the whole process, connected on first use."""
+    global _client
+    if _client is None:
+        _client = await get_client()
+    return _client
+
+
+@app.before_request
+def load_session() -> None:
+    session_id = request.cookies.get(SESSION_COOKIE, "")
+    g.new_session = not (len(session_id) == 32 and all(c in "0123456789abcdef" for c in session_id))
+    g.session_id = secrets.token_hex(16) if g.new_session else session_id
+
+
+@app.after_request
+def save_session(response: Response) -> Response:
+    if g.get("new_session"):
+        response.set_cookie(SESSION_COOKIE, g.session_id, httponly=True, samesite="Lax", max_age=7 * 24 * 3600)
+    return response
+
+
+def workflow_id(job_id: str) -> str:
+    return f"pipeline-{g.session_id}-{job_id}"
+
+
+def temporal_ui_link(job_id: str) -> str:
+    return f"{TEMPORAL_UI_URL}/namespaces/{TEMPORAL_UI_NAMESPACE}/workflows/{workflow_id(job_id)}"
+
+
+@app.route("/healthz")
+def healthz() -> str:
+    return "ok"
+
 
 @app.route("/", methods=["GET", "POST"])
 async def main_order_page() -> str:
@@ -40,12 +99,12 @@ async def run_job() -> str | tuple[str, int]:
     selected_scenario = request.args.get("scenario")
     job_id = request.args.get("job_id")
 
-    if not selected_scenario:
-        return "Error: scenario parameter is required", 400
-    if not job_id:
-        return "Error: job_id parameter is required", 400
+    if not selected_scenario or selected_scenario not in scenarios:
+        return "Error: a valid scenario parameter is required", 400
+    if not job_id or not job_id.isdigit():
+        return "Error: a numeric job_id parameter is required", 400
 
-    client = await get_client()
+    client = await temporal_client()
 
     input = DataPipelineParams(
         input_filename=data["input_filename"],
@@ -53,25 +112,23 @@ async def run_job() -> str | tuple[str, int]:
         poll_or_wait=data["poll_or_wait"],
         validation=data["validation"],
         scenario=selected_scenario,
-        key=job_id,
+        key=workflow_id(job_id),
     )
 
-    if selected_scenario == "HappyPath":
-        await client.start_workflow(
-            "DataPipelineWorkflowHappyPath",
-            input,
-            id=f"job-{job_id}",
-            task_queue="worker_specific_task_queue-distribution-queue",
-        )
-    else:
-        await client.start_workflow(
-            "DataPipeline" + selected_scenario,
-            input,
-            id=f"job-{job_id}",
-            task_queue="worker_specific_task_queue-distribution-queue",
-        )
+    await client.start_workflow(
+        "DataPipeline" + selected_scenario if selected_scenario != "HappyPath" else "DataPipelineWorkflowHappyPath",
+        input,
+        id=workflow_id(job_id),
+        task_queue=TASK_QUEUE,
+        execution_timeout=WORKFLOW_EXECUTION_TIMEOUT,
+    )
 
-    return render_template("job_progress.html", selected_scenario=selected_scenario, job_id=job_id)
+    return render_template(
+        "job_progress.html",
+        selected_scenario=selected_scenario,
+        job_id=job_id,
+        temporal_ui_link=temporal_ui_link(job_id),
+    )
 
 
 @app.route("/confirmation")
@@ -81,11 +138,11 @@ async def order_confirmation() -> str | tuple[str, int]:
     if not job_id:
         return "Error: job_id parameter is required", 400
 
-    client = await get_client()
-    pipeline_workflow = client.get_workflow_handle(f"job-{job_id}")
+    client = await temporal_client()
+    pipeline_workflow = client.get_workflow_handle(workflow_id(job_id))
     await pipeline_workflow.result()
 
-    return render_template("confirmation.html", job_id=job_id)
+    return render_template("confirmation.html", job_id=job_id, temporal_ui_link=temporal_ui_link(job_id))
 
 
 @app.route("/get_progress")
@@ -97,8 +154,8 @@ async def get_progress() -> Response | tuple[Response, int]:
 
     progress_percent = 0
     try:
-        client = await get_client()
-        pipeline_workflow = client.get_workflow_handle(f"job-{job_id}")
+        client = await temporal_client()
+        pipeline_workflow = client.get_workflow_handle(workflow_id(job_id))
 
         try:
             progress_percent = await pipeline_workflow.query("progress")
@@ -106,8 +163,8 @@ async def get_progress() -> Response | tuple[Response, int]:
             print(e)
 
         desc = await pipeline_workflow.describe()
-        if desc.status == 3:
-            error_message = f"Workflow failed: job-{job_id}"
+        if desc.status in FAILED_STATUSES:
+            error_message = f"Workflow {desc.status.name.lower().replace('_', ' ')}: job-{job_id}"
             print(f"Error in get_progress route: {error_message}")
             return jsonify({"error": error_message}), 500
 
@@ -124,8 +181,8 @@ async def signal() -> tuple[str, int] | tuple[Response, int]:
         return jsonify({"error": "job_id parameter is required"}), 400
 
     try:
-        client = await get_client()
-        pipeline_workflow = client.get_workflow_handle(f"job-{job_id}")
+        client = await temporal_client()
+        pipeline_workflow = client.get_workflow_handle(workflow_id(job_id))
         await pipeline_workflow.signal("load_complete_signal", "complete")
     except Exception as e:
         print(f"Error sending signal: {str(e)}")
@@ -143,8 +200,8 @@ async def update() -> Response:
 
     update_result = None
     try:
-        client = await get_client()
-        pipeline_workflow = client.get_workflow_handle(f"job-{job_id}")
+        client = await temporal_client()
+        pipeline_workflow = client.get_workflow_handle(workflow_id(job_id))
         update_result = await pipeline_workflow.execute_update(
             update="load_complete_update",
             arg="complete",
@@ -156,7 +213,3 @@ async def update() -> Response:
     result = f"Update for job_id {job_id} accepted: {update_result}"
 
     return jsonify(result=result)
-
-
-if __name__ == "__main__":
-    app.run(debug=True, port=8080)
