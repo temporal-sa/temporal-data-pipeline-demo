@@ -4,6 +4,10 @@ _Leveraging the Temporal Python SDK_
 
 This demo illustrates how to build a data pipeline with Temporal using the Python SDK. It features a web UI and CLI interface for executing ETL workflows with various scenario demonstrations including error handling, human-in-the-loop patterns, and advanced visibility features.
 
+To present the demo, follow the [runbook](RUNBOOK.md): what to click, what to say and the code behind each scenario.
+
+![The demo's start page](docs/screenshots/start-job.png)
+
 | Prerequisites      |    | Features       |    | Patterns            |    |
 |:-------------------|----|----------------|----|---------------------|----|
 | Network Connection | ✅ | Schedule       |    | Entity              |    |
