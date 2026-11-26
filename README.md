@@ -181,11 +181,13 @@ The web interface provides an intuitive way to demonstrate Temporal workflows to
 - **Talking points:** "Notice how the Load activity runs twice but produces the same result - Temporal guarantees exactly-once execution"
 - **Demo tip:** Show activity history to highlight duplicate execution with same results
 
-**RecoverableFailure** - Transient error handling and recovery
-- **What happens:** Workflow throws an exception mid-execution, triggering retry logic
-- **Key features:** Automatic retries, exponential backoff, workflow resilience
-- **Talking points:** "This simulates infrastructure failures - watch how Temporal automatically retries and recovers"
-- **Demo tip:** Show failed attempts in workflow history, then resume to demonstrate recovery
+**RecoverableFailure** - A bug in workflow code, fixed while the job waits
+- **What happens:** After the transform step the workflow code raises an exception. Temporal fails only the workflow task and keeps retrying it, so the job waits at the bug. The job page then shows a **Deploy fix** button: it sends this one job a `deploy_fix` Signal, which stands in for deploying fixed code, and the job resumes from the bug and completes
+- **Key features:** Workflow task retries, durable progress across a code fix
+- **Talking points:** "A bug doesn't lose the job: Temporal holds it where it failed, and once the fix is deployed it carries on with the finished steps kept"
+- **Demo tip:** Show the failing workflow task's attempt count in the Temporal UI before clicking **Deploy fix**. Locally you can deploy a real fix instead: delete the bug's two lines in `DataPipelineWorkflowScenarios.py` and restart the worker
+
+![A job paused at the bug, with its Deploy fix button](docs/screenshots/recoverable-failure-deploy-fix.png)
 
 **NonRecoverableFailure** - Permanent business logic failure
 - **What happens:** Validation activity fails (input.validation set to "blue"), workflow terminates

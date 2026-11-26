@@ -11,7 +11,8 @@ when that job meets real-world trouble:
 
 - A flaky downstream API: retries happen without any retry code in the job.
 - Bad input: a business failure stops the job at once instead of retrying.
-- A bug in the job's code: the job pauses at the bug and resumes when it is fixed.
+- A bug in the job's code: the job pauses at the bug and resumes when the fix is
+  deployed.
 - A person has to approve a step: the job waits for a Signal or an Update.
 - A step runs twice: an idempotency key keeps the load from repeating.
 - Operators need to find jobs by stage: a custom Search Attribute tracks the step.
@@ -120,18 +121,29 @@ and open **View this workflow in the Temporal UI** in a second tab.
 
 ### 7. RecoverableFailure
 
-- **Do:** run RecoverableFailure.
-- **The audience sees:** the bar reaches 40 percent, then drops back to 0 and stays
-  there: the page cannot read progress while the workflow's code is failing.
+- **Do:** run RecoverableFailure. At 40 percent the bar stops and a red line says
+  "Workflow bug: Temporal is retrying the workflow task (attempt 2)" above a
+  **Deploy fix** button. Show the failing task in the Temporal UI, then click
+  **Deploy fix**.
+
+  ![A job paused at the bug, with its Deploy fix button](docs/screenshots/recoverable-failure-deploy-fix.png)
+
+- **The audience sees:** "Fix deployed: the job resumes at its next workflow task
+  retry." Within about 20 seconds the bar moves on from 40 percent and the job
+  completes.
 - **Say:** "This is a bug in the workflow code itself. Temporal doesn't fail the
-  job: it keeps it paused at the bug and retries the workflow task, so after the
+  job: it keeps it paused at the bug and retries the workflow task, so once the
   fix is deployed the job resumes exactly where it was, with the transform
   already done."
-- **Proof:** the Temporal UI shows a pending workflow task failing with
-  "Workflow bug!" and its attempt count growing.
-- **Hosted copy:** nobody can deploy the fix to it, so the job keeps retrying
-  until its 30-minute execution timeout ends it. Fixing the bug and watching the
-  job resume works only locally; see [Run it locally](#run-it-locally).
+- **Proof:** while it waits, the Temporal UI shows a pending workflow task failing
+  with "Workflow bug!" and its attempt count growing. After the fix, the history
+  shows `WorkflowTaskFailed`, then `WorkflowExecutionSignaled`, then the load and
+  poll Activities; transform does not run again.
+- **Be upfront:** the button is a stand-in. Everyone shares the hosted worker, so
+  the button deploys the fix to this one job by sending it a `deploy_fix` Signal,
+  which the workflow checks at the bug; that Signal is the event in the history.
+  In production the fix is a code deploy and a worker restart, with no Signal
+  ([Pause on a bug, then deploy the fix](#pause-on-a-bug-then-deploy-the-fix)).
 
 ### 8. NonRecoverableFailure
 
@@ -164,7 +176,7 @@ Code links point at the default branch; line numbers are as of this runbook.
 **When to use it:** before the walkthrough, or when someone asks how several
 visitors share one deployment.
 
-**Where it is:** [`ui/app.py` lines 79-81](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/ui/app.py#L79-L81) (`code -g ui/app.py:79`)
+**Where it is:** [`ui/app.py` lines 82-84](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/ui/app.py#L82-L84) (`code -g ui/app.py:82`)
 
 ```python
 def workflow_id(job_id: str) -> str:
@@ -218,7 +230,7 @@ history.
 
 **When to use it:** AdvancedVisibility.
 
-**Where it is:** [`DataPipelineWorkflowScenarios.py` lines 56-58](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/DataPipelineWorkflowScenarios.py#L56-L58) (`code -g DataPipelineWorkflowScenarios.py:56`)
+**Where it is:** [`DataPipelineWorkflowScenarios.py` lines 57-59](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/DataPipelineWorkflowScenarios.py#L57-L59) (`code -g DataPipelineWorkflowScenarios.py:57`)
 
 ```python
         # Advanced Visibility scenario
@@ -239,7 +251,7 @@ history.
 
 **When to use it:** HumanInLoopSignal and HumanInLoopUpdate.
 
-**Where it is:** [`DataPipelineWorkflowScenarios.py` lines 143-152](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/DataPipelineWorkflowScenarios.py#L143-L152) and the handlers at [lines 184-191](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/DataPipelineWorkflowScenarios.py#L184-L191) (`code -g DataPipelineWorkflowScenarios.py:143`)
+**Where it is:** [`DataPipelineWorkflowScenarios.py` lines 146-155](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/DataPipelineWorkflowScenarios.py#L146-L155) and the handlers at [lines 187-194](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/DataPipelineWorkflowScenarios.py#L187-L194) (`code -g DataPipelineWorkflowScenarios.py:146`)
 
 ```python
         # Human In the Loop (signal) scenario
@@ -299,7 +311,7 @@ async def load(input: DataPipelineParams) -> str:
 
 **When to use it:** APIFailure.
 
-**Where it is:** [`activities.py` lines 107-111](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/activities.py#L107-L111) and the retry policy at [`DataPipelineWorkflowScenarios.py` lines 165-172](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/DataPipelineWorkflowScenarios.py#L165-L172) (`code -g activities.py:107`)
+**Where it is:** [`activities.py` lines 107-111](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/activities.py#L107-L111) and the retry policy at [`DataPipelineWorkflowScenarios.py` lines 168-175](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/DataPipelineWorkflowScenarios.py#L168-L175) (`code -g activities.py:107`)
 
 ```python
 async def poll(input: DataPipelineParams, workflow_type: str) -> str:
@@ -327,30 +339,58 @@ async def poll(input: DataPipelineParams, workflow_type: str) -> str:
   attempt limit; the default policy would back off exponentially.
 - Docs: [Retry Policies](https://docs.temporal.io/encyclopedia/retry-policies).
 
-### Stop on bad input, pause on a bug
+### Stop on bad input
 
-**When to use it:** NonRecoverableFailure and RecoverableFailure.
+**When to use it:** NonRecoverableFailure.
 
-**Where it is:** [`DataPipelineWorkflowScenarios.py` lines 70-72](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/DataPipelineWorkflowScenarios.py#L70-L72) and [lines 106-109](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/DataPipelineWorkflowScenarios.py#L106-L109) (`code -g DataPipelineWorkflowScenarios.py:70`)
+**Where it is:** [`DataPipelineWorkflowScenarios.py` lines 71-73](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/DataPipelineWorkflowScenarios.py#L71-L73) (`code -g DataPipelineWorkflowScenarios.py:71`)
 
 ```python
         if not validation:
             workflow.logger.info(f"Validation rejected for: {input.input_filename}")
             raise ApplicationError("Workflow failed due to validation") from CustomException("Validation Failed")
-# ...
-        # Non-Recoverable (bug) Scenario
-        if self.BUG == workflow_type:
-            # Comment out to fix recoverable scenario and uncomment pass
-            raise Exception("Workflow bug!")
 ```
 
 **What you need to understand:**
 
-- An `ApplicationError` raised in workflow code fails the Workflow Execution.
-- Any other exception in workflow code fails only the workflow task, which
-  Temporal retries: the execution stays open, waiting for fixed code. (The
-  comment above the bug says "Non-Recoverable"; the scenario that runs it is
-  RecoverableFailure.)
+- An `ApplicationError` raised in workflow code fails the Workflow Execution at
+  once: the business said no, and retrying would not change the answer.
+- Docs: [Error handling in Python](https://docs.temporal.io/develop/python/best-practices/error-handling).
+
+### Pause on a bug, then deploy the fix
+
+**When to use it:** RecoverableFailure, while the job waits at the bug or right
+after **Deploy fix**.
+
+**Where it is:** [`DataPipelineWorkflowScenarios.py` lines 107-113](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/DataPipelineWorkflowScenarios.py#L107-L113) and the `deploy_fix` handler at [lines 196-198](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/DataPipelineWorkflowScenarios.py#L196-L198) (`code -g DataPipelineWorkflowScenarios.py:107`)
+
+```python
+        # Recoverable failure (bug) scenario: a plain exception in workflow code
+        # fails the workflow task, which Temporal retries until the code is
+        # fixed. The job page's Deploy fix button stands in for deploying fixed
+        # code to this one job: it sends the deploy_fix signal. Deleting this
+        # raise and restarting the worker is the real fix.
+        if self.BUG == workflow_type and not self.fix_deployed:
+            raise Exception("Workflow bug!")
+# ...
+    @workflow.signal
+    async def deploy_fix(self) -> None:
+        self.fix_deployed = True
+```
+
+**What you need to understand:**
+
+- Any exception other than `ApplicationError` in workflow code fails only the
+  workflow task, which Temporal retries: the execution stays open, with the
+  results of the finished Activities kept, waiting for fixed code.
+- `fix_deployed` and the `deploy_fix` Signal are demo machinery, so each visitor
+  can fix their own job on a shared worker. The Signal is recorded in the
+  history, so the fixed path replays deterministically. In production you
+  deploy new code instead (with a
+  [patch](https://docs.temporal.io/develop/python/versioning) when the change
+  would alter the commands of open executions).
+- The page knows the job is stuck because the pending workflow task is past its
+  first attempt: `get_progress` in `ui/app.py` reads it from `describe()`.
 - The web UI starts every job with a 30-minute execution timeout
   ([`ui/app.py` line 23](https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/ui/app.py#L23)),
   which ends a job nobody fixes or answers.
@@ -360,14 +400,15 @@ async def poll(input: DataPipelineParams, workflow_type: str) -> str:
 
 There is nothing to reset: every **Run Job** is a new Workflow with its own ID.
 Every job ends by itself: most within a minute, human-in-the-loop ones after
-60 seconds without a click, and a RecoverableFailure job at its 30-minute
-execution timeout. Nothing keeps consuming Actions after that.
+60 seconds without a click, and a RecoverableFailure job nobody deploys the fix
+to at its 30-minute execution timeout. Nothing keeps consuming Actions after that.
 
 ## When something goes wrong
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
-| The bar stays at 0 and the job never moves | The worker is down (scaled down or crashed), or this is RecoverableFailure | Wait for the worker to come back; for RecoverableFailure this is expected |
+| The bar stays at 0 and the job never moves | The worker is down (scaled down or crashed) | Wait for the worker to come back |
+| RecoverableFailure shows no **Deploy fix** button | The button appears only once the workflow task has failed twice, a few seconds after the bar reaches 40 percent | Wait; check the pending workflow task in the Temporal UI |
 | Error "Failed to load namespaces from json file" or a `load` Activity retrying with "No such file" | The worker was replaced between extract and load and its files were lost | Run the job again; crash only before a job or at 80 percent |
 | AdvancedVisibility fails on `Step` | The namespace has no `Step` search attribute | Locally, restart the worker (it registers `Step`); on Temporal Cloud create it as Keyword |
 | A signal or update says "workflow not found" | The page was opened in another browser, or the cookie was cleared | Start a new job in this browser |
@@ -395,13 +436,14 @@ by the Temporal SDK's environment configuration), `TEMPORAL_TASK_QUEUE` (default
 `data-pipeline`), `TEMPORAL_UI_URL` (default `http://localhost:8233`),
 `ENCRYPT_PAYLOADS`.
 
-Local-only beats:
+Every beat above runs locally too. Two go further on your own machine:
 
-- **Fix the bug (RecoverableFailure):** start the job, show the failing workflow
-  task, then in `DataPipelineWorkflowScenarios.py` comment out
-  `raise Exception("Workflow bug!")` and uncomment `# pass`, and restart the
-  worker (in Docker, run `just up` again: it rebuilds and replaces the worker).
-  The job resumes from the bug and completes.
+- **Deploy a real fix (RecoverableFailure):** instead of clicking **Deploy fix**,
+  delete the two bug lines (`if self.BUG == workflow_type and not
+  self.fix_deployed:` and its `raise`) in `DataPipelineWorkflowScenarios.py` and
+  restart the worker (in Docker, run `just up` again: it rebuilds and replaces
+  the worker). The job resumes from the bug and completes, with no Signal in its
+  history.
 - **Crash the worker:** stop it with Ctrl-C (in Docker, `docker compose kill worker`)
   while a job is running and start it again (`docker compose start worker`).
   Locally the files stay on disk (in Docker, on the worker's volumes), so the
