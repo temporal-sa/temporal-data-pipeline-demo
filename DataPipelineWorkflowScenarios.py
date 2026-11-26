@@ -1,6 +1,7 @@
 import asyncio
+from collections.abc import Sequence
 from datetime import timedelta
-from typing import Any, Sequence  # noqa: UP035 - Temporal dynamic workflows require typing.Sequence
+from typing import Any
 
 import temporalio
 from temporalio import workflow
@@ -146,7 +147,7 @@ class DataPipelineWorkflowScenarios:
                 workflow.logger.info(
                     f"Received signal that load completed: {input.input_filename} load complete: {self.signal_received}"
                 )
-            except asyncio.TimeoutError as e:
+            except TimeoutError as e:
                 # could return "Load did not complete before timeout."
                 raise temporalio.exceptions.ApplicationError("Load did not complete before timeout") from e
 
@@ -157,7 +158,7 @@ class DataPipelineWorkflowScenarios:
                 workflow.logger.info(
                     f"Received update that load completed: {input.input_filename} load complete: {self.update_received}"
                 )
-            except asyncio.TimeoutError as e:
+            except TimeoutError as e:
                 # could return "Load did not complete before timeout."
                 raise temporalio.exceptions.ApplicationError("Load did not complete before timeout") from e
         else:
