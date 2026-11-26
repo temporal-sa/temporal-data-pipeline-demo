@@ -24,7 +24,39 @@ To present the demo, follow the [runbook](RUNBOOK.md): what to click, what to sa
 |                    |    | Worker Metrics |    |                     |    |
 |                    |    | Side Effect    |    |                     |    |
 
-## Quick Start Installation
+## Quick Start with Docker
+
+With only [Docker](https://docs.docker.com/get-docker/) (with Compose) and
+[just](https://github.com/casey/just) installed:
+
+```bash
+git clone <repository-url>
+cd temporal-data-pipeline-demo
+just up
+```
+
+`just up` builds the image and starts a Temporal dev server, the worker and
+the web UI (`compose.yaml`), and returns once they are healthy:
+
+- Web UI: [http://localhost:8080](http://localhost:8080)
+- Temporal Web UI: [http://localhost:8233](http://localhost:8233)
+
+Without `just`, run `docker compose up --build --detach --wait`.
+
+- `just logs` (or `just logs worker`) follows the logs.
+- `just down` stops everything and removes the job files; the dev server keeps
+  no history between runs.
+- To use other host ports, set `DEMO_PORT` and `TEMPORAL_UI_PORT`, for example
+  `DEMO_PORT=9080 just up`.
+- To crash the worker mid-job, run `docker compose kill worker`, then
+  `docker compose start worker`.
+- After you change the code, run `just up` again: it rebuilds the image and
+  replaces the worker, and running jobs carry on.
+- Temporal's gRPC port stays inside Docker, so the stack runs beside a local
+  `temporal server start-dev`. Use the CLI against it with
+  `docker compose exec temporal temporal workflow list --address 127.0.0.1:7233`.
+
+## Quick Start without Docker
 
 ### Prerequisites
 
@@ -291,7 +323,8 @@ other's jobs. Each job works in its own directories,
 
 The `Dockerfile` builds one image for both processes. It starts the web UI on
 `$PORT` (default 8080); run the worker from the same image with
-`python worker.py`.
+`python worker.py`. `compose.yaml` runs both, with a Temporal dev server, for
+`just up`.
 
 ## Demo Tips for Trade Shows
 
@@ -351,6 +384,7 @@ temporal-data-pipeline-demo/
 ├── dataobjects.py                  # Data classes and exceptions
 ├── encryption_codec.py             # Optional payload encryption
 ├── Dockerfile                      # Image for the web UI and the worker
+├── compose.yaml                    # Whole demo in Docker (just up)
 ├── ui/                            # Flask web interface
 │   ├── app.py                     # Web application
 │   └── templates/                 # HTML templates
@@ -365,7 +399,7 @@ temporal-data-pipeline-demo/
 
 ### Common Issues
 
-**Port conflicts**: If port 7233 is in use, stop other Temporal servers with `just temporal-stop`
+**Port conflicts**: If port 7233 is in use, stop other Temporal servers with `just temporal-stop`. With `just up`, if 8080 or 8233 is in use, pick other ports with `DEMO_PORT` and `TEMPORAL_UI_PORT`
 
 **Worker not starting**: Ensure Temporal server is running first
 

@@ -19,8 +19,12 @@ RUN uv sync --locked --no-dev --no-install-project
 
 COPY . .
 
-# The activities write job files under demodata/ and the idempotency file in /app.
-RUN useradd --create-home --uid 10001 app && chown -R app /app
+# The activities write job files under demodata/working and demodata/output
+# and the idempotency file in /app. The directories exist in the image so a
+# volume mounted on them is owned by the app user.
+RUN useradd --create-home --uid 10001 app \
+    && mkdir -p demodata/working demodata/output \
+    && chown -R app /app
 USER 10001
 
 EXPOSE 8080

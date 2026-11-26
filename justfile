@@ -5,6 +5,25 @@
 default:
     @just --list
 
+# Docker: the whole demo with no setup
+
+# Build and start the Temporal dev server, the worker and the web UI in Docker
+up:
+    docker compose up --build --detach --wait
+    @echo ""
+    @echo "Demo is up:"
+    @echo "  Web UI:          http://localhost:${DEMO_PORT:-8080}"
+    @echo "  Temporal Web UI: http://localhost:${TEMPORAL_UI_PORT:-8233}"
+    @echo "Follow the logs with 'just logs'; stop everything with 'just down'."
+
+# Stop the Docker demo and remove its containers and job files
+down:
+    docker compose down --volumes
+
+# Follow the Docker demo's logs (all services, or one: just logs worker)
+logs *SERVICE:
+    docker compose logs --follow {{SERVICE}}
+
 # Code Quality & Development Recipes
 
 # Run ruff linting checks

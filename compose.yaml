@@ -1,0 +1,61 @@
+# The whole demo on one machine with nothing but Docker: a Temporal dev
+# server, the worker and the web UI. Start it with `just up` (or
+# `docker compose up --build --detach --wait`) and stop it with `just down`.
+#
+#   Web UI:          http://localhost:8080 (DEMO_PORT overrides 8080)
+#   Temporal Web UI: http://localhost:8233 (TEMPORAL_UI_PORT overrides 8233)
+#
+# Temporal's gRPC port stays inside the Compose network, so the demo runs
+# beside a local `temporal server start-dev`. Run the temporal CLI against
+# this server with `docker compose exec temporal temporal ...`.
+name: data-pipeline
+
+services:
+  temporal:
+    image: temporalio/temporal:1.10.0
+    command: ["server", "start-dev", "--ip", "0.0.0.0"]
+    ports:
+      - "${TEMPORAL_UI_PORT:-8233}:8233"
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "127.0.0.1:7233"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  worker:
+    build: .
+    command: ["python", "worker.py"]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_TASK_QUEUE: data-pipeline
+    # The extract, transform and load steps hand each other files; volumes keep
+    # them when `just up` rebuilds and replaces the worker mid-job.
+    volumes:
+      - working:/app/demodata/working
+      - output:/app/demodata/output
+    depends_on:
+      temporal:
+        condition: service_healthy
+
+  ui:
+    build: .
+    ports:
+      - "${DEMO_PORT:-8080}:8080"
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_TASK_QUEUE: data-pipeline
+      TEMPORAL_UI_URL: http://localhost:${TEMPORAL_UI_PORT:-8233}
+    depends_on:
+      temporal:
+        condition: service_healthy
+      worker:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  working:
+  output:

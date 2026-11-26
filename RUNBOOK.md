@@ -374,7 +374,11 @@ execution timeout. Nothing keeps consuming Actions after that.
 
 ## Run it locally
 
-Tools: Python 3.11 or later, [uv](https://docs.astral.sh/uv/), the
+With Docker and `just`: run `just up` (or
+`docker compose up --build --detach --wait`) and open http://localhost:8080;
+the Temporal UI is at http://localhost:8233. `just down` stops it.
+
+Without Docker, tools: Python 3.11 or later, [uv](https://docs.astral.sh/uv/), the
 [Temporal CLI](https://docs.temporal.io/cli), and optionally `just`.
 
 1. Start a dev server: `temporal server start-dev` (Temporal UI at
@@ -396,6 +400,9 @@ Local-only beats:
 - **Fix the bug (RecoverableFailure):** start the job, show the failing workflow
   task, then in `DataPipelineWorkflowScenarios.py` comment out
   `raise Exception("Workflow bug!")` and uncomment `# pass`, and restart the
-  worker. The job resumes from the bug and completes.
-- **Crash the worker:** stop it with Ctrl-C while a job is running and start it
-  again. Locally the files stay on disk, so the job resumes at any stage.
+  worker (in Docker, run `just up` again: it rebuilds and replaces the worker).
+  The job resumes from the bug and completes.
+- **Crash the worker:** stop it with Ctrl-C (in Docker, `docker compose kill worker`)
+  while a job is running and start it again (`docker compose start worker`).
+  Locally the files stay on disk (in Docker, on the worker's volumes), so the
+  job resumes at any stage.
