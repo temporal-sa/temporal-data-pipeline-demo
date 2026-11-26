@@ -1,8 +1,8 @@
+import asyncio
 import json
 import os
 import random
 import shutil
-import time
 from pathlib import Path
 
 from temporalio import activity
@@ -30,17 +30,17 @@ async def validate(input: DataPipelineParams) -> bool:
 @activity.defn
 async def extract(input: DataPipelineParams) -> str:
     try:
-        initialize(input.foldername)
+        initialize(input.foldername, input.key)
     except OSError as e:
         raise ApplicationError(f"Initialization failed: {e}", non_retryable=True) from e
 
     shutil.copy(
         input.foldername + "/source/" + input.input_filename,
-        input.foldername + "/working/" + input.input_filename,
+        job_dir(input.foldername, "working", input.key) + input.input_filename,
     )
 
     # Simulate random sleep
-    time.sleep(random.randint(1, 3))
+    await asyncio.sleep(random.randint(1, 3))
     activity.heartbeat(input.input_filename)
 
     return "success"
@@ -49,17 +49,17 @@ async def extract(input: DataPipelineParams) -> str:
 @activity.defn
 async def transform(input: DataPipelineParams) -> str:
     try:
-        namespaces = get_namespaces(input.foldername, input.input_filename)
+        namespaces = get_namespaces(input.foldername, input.key, input.input_filename)
     except (OSError, json.JSONDecodeError, KeyError) as e:
         raise ApplicationError(f"Failed to load namespaces from json file: {e}", non_retryable=True) from e
 
-    workingfilename = input.foldername + "/working/" + Path(input.input_filename).stem + ".csv"
+    workingfilename = job_dir(input.foldername, "working", input.key) + Path(input.input_filename).stem + ".csv"
     namespacesCSVFile = open(workingfilename, "w+")
     namespacesCSVFile.write("Namespace,\n")
     for i in namespaces:
         namespacesCSVFile.write(f"{i},\n")
         # Simulate sleep
-        time.sleep(1)
+        await asyncio.sleep(1)
         activity.heartbeat(input.input_filename)
 
     namespacesCSVFile.close()
@@ -78,16 +78,16 @@ async def load(input: DataPipelineParams) -> str:
         return "idempotency key " + input.key + " found, skipping... "
 
     shutil.copy(
-        input.foldername + "/working/" + Path(input.input_filename).stem + ".csv",
-        input.foldername + "/output/" + Path(input.input_filename).stem + ".csv",
+        job_dir(input.foldername, "working", input.key) + Path(input.input_filename).stem + ".csv",
+        job_dir(input.foldername, "output", input.key) + Path(input.input_filename).stem + ".csv",
     )
 
     # Simulate random sleep
-    time.sleep(random.randint(1, 3))
+    await asyncio.sleep(random.randint(1, 3))
     activity.heartbeat(input.input_filename)
 
     try:
-        cleanup(input.foldername)
+        cleanup(input.foldername, input.key)
     except OSError as e:
         raise ApplicationError(f"Cleanup failed: {e}", non_retryable=True) from e
 
@@ -111,35 +111,33 @@ async def poll(input: DataPipelineParams, workflow_type: str) -> str:
         return "polled successfully: found"
     else:
         # Simulate delay
-        time.sleep(5)
+        await asyncio.sleep(5)
         return "polled successfully: found"
 
 
-def initialize(datafolder: str) -> None:
-    """Initialize data folder structure by cleaning up old files and creating directories."""
-    if os.path.isfile(datafolder + "/working/" + "info.json"):
-        os.remove(datafolder + "/working/" + "info.json")
-    if os.path.isfile(datafolder + "/working/" + "info.csv"):
-        os.remove(datafolder + "/working/" + "info.csv")
-    if os.path.isfile(datafolder + "/output/" + "info.csv"):
-        os.remove(datafolder + "/output/" + "info.csv")
-
-    os.makedirs(datafolder + "/working/", exist_ok=True)
-    os.makedirs(datafolder + "/output/", exist_ok=True)
+def job_dir(datafolder: str, stage: str, key: str) -> str:
+    """The job's own directory under working/ or output/, so concurrent jobs never share files."""
+    return f"{datafolder}/{stage}/{key}/"
 
 
-def cleanup(datafolder: str) -> None:
-    """Clean up working files."""
-    if os.path.isfile(datafolder + "/working/" + "info.json"):
-        os.remove(datafolder + "/working/" + "info.json")
-    if os.path.isfile(datafolder + "/working/" + "info.csv"):
-        os.remove(datafolder + "/working/" + "info.csv")
+def initialize(datafolder: str, key: str) -> None:
+    """Create the job's working and output directories, removing what an earlier attempt left."""
+    shutil.rmtree(job_dir(datafolder, "working", key), ignore_errors=True)
+    shutil.rmtree(job_dir(datafolder, "output", key), ignore_errors=True)
+
+    os.makedirs(job_dir(datafolder, "working", key), exist_ok=True)
+    os.makedirs(job_dir(datafolder, "output", key), exist_ok=True)
 
 
-def get_namespaces(datafolder: str, filename: str) -> list[str]:
+def cleanup(datafolder: str, key: str) -> None:
+    """Remove the job's working files."""
+    shutil.rmtree(job_dir(datafolder, "working", key), ignore_errors=True)
+
+
+def get_namespaces(datafolder: str, key: str, filename: str) -> list[str]:
     """Load namespaces from JSON file."""
     namespaces = []
-    with open(datafolder + "/working/" + filename) as namespacesJSONFile:
+    with open(job_dir(datafolder, "working", key) + filename) as namespacesJSONFile:
         namespacesDict = json.load(namespacesJSONFile)
         for i in namespacesDict["namespaces"]:
             namespaces.append(i)

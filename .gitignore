@@ -6,3 +6,5 @@ commit-msg.md
 .claude/*
 .mypy_cache/*
 .ruff_cache/*
+.env
+demodata/working/*
